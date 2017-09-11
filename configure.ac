@@ -18,6 +18,7 @@ PKG_CHECK_MODULES([SDL2_image], [SDL2_image])
 PKG_CHECK_MODULES([LAVF], [libavformat])
 PKG_CHECK_MODULES([LAVC], [libavcodec])
 PKG_CHECK_MODULES([LAVU], [libavutil])
+PKG_CHECK_MODULES([LAVFI], [libavfilter])
 
 # Checks for header files.
 
