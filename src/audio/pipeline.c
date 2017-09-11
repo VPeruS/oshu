@@ -42,6 +42,7 @@ static SDL_AudioFormat format_map[AV_SAMPLE_FMT_NB] = {
 void oshu_audio_init()
 {
 	av_register_all();
+	avfilter_register_all();
 }
 
 /**

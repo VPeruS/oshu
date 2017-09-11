@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <libavfilter/avfilter.h>
 #include <libavformat/avformat.h>
 #include <SDL2/SDL.h>
 
@@ -131,7 +132,17 @@ int oshu_next_frame(struct oshu_stream *steam);
 void oshu_close_stream(struct oshu_stream *stream);
 
 /**
- * The full audio pipeline.
+ * The audio pipeline graph.
+ */
+struct oshu_pipeline {
+	AVFilterGraph *graph;
+	AVFilterContext *music;
+	AVFilterContext *sink;
+};
+
+/**
+ * The full audio package, from the music source and the samples to the output
+ * device and everything in-between.
  *
  * This structure is mainly accessed through an audio thread, and should be
  * locked using SDL's `SDL_LockAudioDevice` and `SDL_UnlockAudioDevice`
@@ -144,6 +155,7 @@ void oshu_close_stream(struct oshu_stream *stream);
  */
 struct oshu_audio {
 	struct oshu_stream source;
+	struct oshu_pipeline pipeline;
 	SDL_AudioDeviceID device_id;
 	SDL_AudioSpec device_spec;
 	/**
