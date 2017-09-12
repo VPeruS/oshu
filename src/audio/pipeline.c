@@ -10,6 +10,7 @@
 #include "log.h"
 
 #include <assert.h>
+#include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
 #include <libavutil/time.h>
 
@@ -84,96 +85,13 @@ int next_frame(struct oshu_audio *audio)
 }
 
 /**
- * Fill SDL's audio buffer, while requesting more frames as needed.
- *
- * libavcodec organize frames by channel in planar mode (LLLLRRRR), while we'd
- * like them to be interleaved as SDL requires (LRLRLRLR). This makes a
- * intricate nesting of loops. In that order: frame loop, sample loop, channel
- * loop. Makes sense.
- *
- * When frames are interleaved, a coarser memcpy does the trick.
- *
- * When the stream is finished, fill what remains of the buffer with silence,
- * because you never know what SDL might do with a left-over buffer. Most
- * likely, it would play the previous buffer over, and over again.
- */
-static void fill_audio(struct oshu_audio *audio, Uint8 *buffer, int len)
-{
-	AVFrame *frame = audio->source.frame;
-	int sample_size = av_get_bytes_per_sample(frame->format);
-	int planar = av_sample_fmt_is_planar(frame->format);
-	while (len > 0 && !audio->finished) {
-		if (planar) {
-			while (len > 0 && audio->sample_index < frame->nb_samples) {
-				/* Copy 1 sample per iteration. */
-				size_t offset = sample_size * audio->sample_index;
-				for (int ch = 0; ch < frame->channels; ch++) {
-					memcpy(buffer, frame->data[ch] + offset, sample_size);
-					buffer += sample_size;
-				}
-				len -= sample_size * frame->channels;
-				audio->sample_index++;
-			}
-		} else {
-			size_t offset = sample_size * audio->sample_index * frame->channels;
-			size_t left = sample_size * frame->nb_samples * frame->channels - offset;
-			size_t block = (left < len) ? left : len;
-			assert (block % (sample_size * frame->channels) == 0);
-			memcpy(buffer, frame->data[0] + offset, block);
-			buffer += block;
-			len -= block;
-			audio->sample_index += block / (sample_size * frame->channels);
-		}
-		if (audio->sample_index >= frame->nb_samples)
-			next_frame(audio);
-	}
-	assert (len >= 0);
-	memset(buffer, len, audio->device_spec.silence);
-}
-
-/**
- * Mix the already present data in the buffer with the sample.
- *
- * This should be called right after #fill_audio.
- *
- * Note that SDL's documentation recommends against calling
- * `SDL_MixAudioFormat` more than once, because the clipping would deteriorate
- * the overall sound quality.
- */
-static void mix_sample(Uint8 *buffer, int len, struct oshu_audio *audio, struct oshu_sample *sample)
-{
-	while (len > 0) {
-		if (sample->cursor >= sample->length) {
-			if (sample->loop)
-				sample->cursor = 0;
-			else
-				break;
-		}
-		size_t left = sample->length - sample->cursor;
-		size_t block = (left < len) ? left : len;
-		SDL_MixAudioFormat(
-			buffer,
-			sample->buffer + sample->cursor,
-			audio->device_spec.format,
-			block,
-			SDL_MIX_MAXVOLUME
-		);
-		sample->cursor += block;
-		buffer += block;
-		len -= block;
-	}
-}
-
-/**
  * Fill the audio buffer with the song data, then optionally add a sample.
  */
 static void audio_callback(void *userdata, Uint8 *buffer, int len)
 {
 	struct oshu_audio *audio;
 	audio = (struct oshu_audio*) userdata;
-	fill_audio(audio, buffer, len);
-	if (audio->overlay != NULL)
-		mix_sample(buffer, len, audio, audio->overlay);
+	memset(buffer, len, audio->device_spec.silence);
 }
 
 /**
@@ -234,6 +152,7 @@ static int create_graph(struct oshu_audio *audio)
 		goto fail;
 	if ((rc = avfilter_graph_config(p->graph, NULL)) < 0)
 		goto fail;
+	av_buffersink_set_frame_size(p->sink, sample_buffer_size);
 	return 0;
 fail:
 	oshu_av_error(rc);
@@ -249,6 +168,8 @@ int oshu_audio_open(const char *url, struct oshu_audio **audio)
 	}
 	if (oshu_open_stream(url, &(*audio)->source) < 0)
 		goto fail;
+	(*audio)->frame = av_frame_alloc();
+	assert ((*audio)->frame);
 	if (create_graph(*audio) < 0)
 		goto fail;
 	if (open_device(*audio) < 0)

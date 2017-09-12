@@ -158,6 +158,7 @@ struct oshu_audio {
 	struct oshu_pipeline pipeline;
 	SDL_AudioDeviceID device_id;
 	SDL_AudioSpec device_spec;
+	AVFrame *frame;
 	/**
 	 * The current temporal position in the playing stream, expressed in
 	 * floating seconds.
