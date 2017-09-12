@@ -373,4 +373,10 @@ void oshu_sampleset_free(oshu_sampleset *set);
 
 /** \} */
 
+/**
+ * Spew an error message according to the return value of a call to one of
+ * ffmpeg's functions.
+ */
+void oshu_av_error(int rc);
+
 /** \} */

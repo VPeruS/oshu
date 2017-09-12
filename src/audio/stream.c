@@ -9,11 +9,7 @@
 #include "audio/audio.h"
 #include "log.h"
 
-/**
- * Spew an error message according to the return value of a call to one of
- * ffmpeg's functions.
- */
-static void log_av_error(int rc)
+void oshu_av_error(int rc)
 {
 	char errbuf[256];
 	av_strerror(rc, errbuf, sizeof(errbuf));
@@ -50,7 +46,7 @@ static int next_page(struct oshu_stream *stream)
 	}
 	av_packet_unref(&stream->packet);
 	if (rc < 0) {
-		log_av_error(rc);
+		oshu_av_error(rc);
 		return -1;
 	}
 	return 0;
@@ -71,7 +67,7 @@ int oshu_next_frame(struct oshu_stream *stream)
 			oshu_log_debug("reached the last frame");
 			return AVERROR_EOF;
 		} else {
-			log_av_error(rc);
+			oshu_av_error(rc);
 			return -1;
 		}
 	}
@@ -112,7 +108,7 @@ static int open_demuxer(const char *url, struct oshu_stream *stream)
 	stream->time_base = av_q2d(stream->stream->time_base);
 	return 0;
 fail:
-	log_av_error(rc);
+	oshu_av_error(rc);
 	return -1;
 }
 
@@ -146,7 +142,7 @@ static int open_decoder(struct oshu_stream *stream)
 	}
 	return 0;
 fail:
-	log_av_error(rc);
+	oshu_av_error(rc);
 	return -1;
 }
 
