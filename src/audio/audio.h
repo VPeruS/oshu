@@ -138,6 +138,7 @@ struct oshu_pipeline {
 	AVFilterGraph *graph;
 	AVFilterContext *music;
 	AVFilterContext *sink;
+	AVFrame *output;
 };
 
 /**
@@ -158,7 +159,6 @@ struct oshu_audio {
 	struct oshu_pipeline pipeline;
 	SDL_AudioDeviceID device_id;
 	SDL_AudioSpec device_spec;
-	AVFrame *frame;
 	/**
 	 * The current temporal position in the playing stream, expressed in
 	 * floating seconds.
@@ -175,9 +175,6 @@ struct oshu_audio {
 	 * duration in seconds.
 	 */
 	double current_timestamp;
-	/** Current position in the decoded frame's buffer.
-	 *  Multiply it by the sample size to get the position in bytes. */
-	int sample_index;
 	/** When true, stop decoding the stream and output silence. */
 	int finished;
 	/** Sound sample to play on top of the audio stream.

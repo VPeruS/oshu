@@ -74,12 +74,15 @@ int next_frame(struct oshu_audio *audio)
 {
 	int rc = oshu_next_frame(&audio->source);
 	if (rc < 0) {
+		rc = av_buffersrc_write_frame(audio->pipeline.music, NULL);
+		assert (rc == 0);
 		audio->finished = 1;
 	} else {
+		rc = av_buffersrc_write_frame(audio->pipeline.music, audio->source.frame);
+		assert (rc == 0);
 		int64_t ts = audio->source.frame->best_effort_timestamp;
 		if (ts > 0)
 			audio->current_timestamp = audio->source.time_base * ts;
-		audio->sample_index = 0;
 	}
 	return 0;
 }
@@ -91,6 +94,21 @@ static void audio_callback(void *userdata, Uint8 *buffer, int len)
 {
 	struct oshu_audio *audio;
 	audio = (struct oshu_audio*) userdata;
+	int rc;
+	for (;;) {
+		rc = av_buffersink_get_frame(audio->pipeline.sink, audio->pipeline.output);
+		if (rc == AVERROR(EAGAIN)) {
+			next_frame(audio);
+		} else if (rc == AVERROR_EOF) {
+			break;
+		} else if (rc == 0) {
+			printf("%s %d\n", av_get_sample_fmt_name(audio->pipeline.output->format), audio->pipeline.output->nb_samples);
+			break;
+		} else {
+			/* error */
+			break;
+		}
+	}
 	memset(buffer, len, audio->device_spec.silence);
 }
 
@@ -152,6 +170,8 @@ static int create_graph(struct oshu_audio *audio)
 		goto fail;
 	if ((rc = avfilter_graph_config(p->graph, NULL)) < 0)
 		goto fail;
+	p->output = av_frame_alloc();
+	assert (p->output);
 	av_buffersink_set_frame_size(p->sink, sample_buffer_size);
 	return 0;
 fail:
@@ -168,8 +188,6 @@ int oshu_audio_open(const char *url, struct oshu_audio **audio)
 	}
 	if (oshu_open_stream(url, &(*audio)->source) < 0)
 		goto fail;
-	(*audio)->frame = av_frame_alloc();
-	assert ((*audio)->frame);
 	if (create_graph(*audio) < 0)
 		goto fail;
 	if (open_device(*audio) < 0)
