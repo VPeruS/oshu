@@ -137,6 +137,7 @@ void oshu_close_stream(struct oshu_stream *stream);
 struct oshu_pipeline {
 	AVFilterGraph *graph;
 	AVFilterContext *music;
+	AVFilterContext *converter;
 	AVFilterContext *sink;
 	AVFrame *output;
 };

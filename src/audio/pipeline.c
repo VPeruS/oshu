@@ -20,27 +20,6 @@
  */
 static const int sample_buffer_size = 1024;
 
-/**
- * Conversion map from ffmpeg's audio formats to SDL's.
- *
- * ffmpeg's format may be planar or not, while SDL only accepts interleaved
- * samples. The planar to interleaved conversion is performed by the audio
- * callback when filling SDL's buffer.
- *
- * 64-bit or double samples are not supported by SDL, so they're omitted here
- * and implicitly filled with zero's.
- */
-static SDL_AudioFormat format_map[AV_SAMPLE_FMT_NB] = {
-	[AV_SAMPLE_FMT_U8] = AUDIO_U8,
-	[AV_SAMPLE_FMT_S16] = AUDIO_S16SYS,
-	[AV_SAMPLE_FMT_S32] = AUDIO_S32SYS,
-	[AV_SAMPLE_FMT_FLT] = AUDIO_F32,
-	[AV_SAMPLE_FMT_U8P] = AUDIO_U8,
-	[AV_SAMPLE_FMT_S16P] = AUDIO_S16SYS,
-	[AV_SAMPLE_FMT_S32P] = AUDIO_S32SYS,
-	[AV_SAMPLE_FMT_FLTP] = AUDIO_F32,
-};
-
 void oshu_audio_init()
 {
 	av_register_all();
@@ -76,7 +55,6 @@ int next_frame(struct oshu_audio *audio)
 	if (rc < 0) {
 		rc = av_buffersrc_write_frame(audio->pipeline.music, NULL);
 		assert (rc == 0);
-		audio->finished = 1;
 	} else {
 		rc = av_buffersrc_write_frame(audio->pipeline.music, audio->source.frame);
 		assert (rc == 0);
@@ -95,17 +73,19 @@ static void audio_callback(void *userdata, Uint8 *buffer, int len)
 	struct oshu_audio *audio;
 	audio = (struct oshu_audio*) userdata;
 	int rc;
-	for (;;) {
+	while (!audio->finished) {
 		rc = av_buffersink_get_frame(audio->pipeline.sink, audio->pipeline.output);
 		if (rc == AVERROR(EAGAIN)) {
 			next_frame(audio);
+			continue;
 		} else if (rc == AVERROR_EOF) {
+			audio->finished = 1;
 			break;
 		} else if (rc == 0) {
-			printf("%s %d\n", av_get_sample_fmt_name(audio->pipeline.output->format), audio->pipeline.output->nb_samples);
-			break;
+			memcpy(buffer, audio->pipeline.output->data[0], len);
+			return;
 		} else {
-			/* error */
+			oshu_av_error(rc);
 			break;
 		}
 	}
@@ -121,14 +101,9 @@ static int open_device(struct oshu_audio *audio)
 	SDL_AudioSpec want;
 	SDL_zero(want);
 	want.freq = audio->source.decoder->sample_rate;
-	SDL_AudioFormat fmt = format_map[audio->source.decoder->sample_fmt];
-	if (!fmt) {
-		oshu_log_error("unsupported sample format");
-		return -1;
-	}
-	want.format = fmt;
+	want.format = AUDIO_F32;
 	want.channels = audio->source.decoder->channels;
-	want.samples = sample_buffer_size;
+	want.samples = sample_buffer_size * want.channels;
 	want.callback = audio_callback;
 	want.userdata = (void*) audio;
 	audio->device_id = SDL_OpenAudioDevice(NULL, 0, &want, &audio->device_spec, 0);
@@ -145,6 +120,7 @@ static int create_graph(struct oshu_audio *audio)
 	struct oshu_pipeline *p = &audio->pipeline;
 	p->graph = avfilter_graph_alloc();
 	assert (p->graph);
+
 	AVFilter *abuffer = avfilter_get_by_name("abuffer");
 	assert (abuffer);
 	p->music = avfilter_graph_alloc_filter(p->graph, abuffer, "music");
@@ -160,20 +136,35 @@ static int create_graph(struct oshu_audio *audio)
 	av_free(music_params);
 	if ((rc = avfilter_init_str(p->music, NULL)) < 0)
 		goto fail;
+
+	AVFilter *aformat = avfilter_get_by_name("aformat");
+	assert (aformat);
+	p->converter = avfilter_graph_alloc_filter(p->graph, aformat, "converter");
+	assert (p->converter);
+	if ((rc = avfilter_init_str(p->converter, "sample_fmts=flt")) < 0)
+		goto fail;
+
 	AVFilter *abuffersink = avfilter_get_by_name("abuffersink");
 	assert (abuffersink);
 	p->sink = avfilter_graph_alloc_filter(p->graph, abuffersink, "sink");
 	assert (p->sink);
 	if ((rc = avfilter_init_str(p->sink, NULL)) < 0)
 		goto fail;
-	if ((rc = avfilter_link(p->music, 0, p->sink, 0)) < 0)
+
+	if ((rc = avfilter_link(p->music, 0, p->converter, 0)) < 0)
+		goto fail;
+	if ((rc = avfilter_link(p->converter, 0, p->sink, 0)) < 0)
 		goto fail;
 	if ((rc = avfilter_graph_config(p->graph, NULL)) < 0)
 		goto fail;
+
+	av_buffersink_set_frame_size(p->sink, sample_buffer_size);
+
 	p->output = av_frame_alloc();
 	assert (p->output);
-	av_buffersink_set_frame_size(p->sink, sample_buffer_size);
+
 	return 0;
+
 fail:
 	oshu_av_error(rc);
 	return -1;
