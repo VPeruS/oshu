@@ -10,6 +10,7 @@
 #include "log.h"
 
 #include <assert.h>
+#include <libavfilter/buffersrc.h>
 #include <libavutil/time.h>
 
 /**
@@ -202,6 +203,43 @@ static int open_device(struct oshu_audio *audio)
 	return 0;
 }
 
+static int create_graph(struct oshu_audio *audio)
+{
+	int rc;
+	struct oshu_pipeline *p = &audio->pipeline;
+	p->graph = avfilter_graph_alloc();
+	assert (p->graph);
+	AVFilter *abuffer = avfilter_get_by_name("abuffer");
+	assert (abuffer);
+	p->music = avfilter_graph_alloc_filter(p->graph, abuffer, "music");
+	assert (p->music);
+	AVBufferSrcParameters *music_params = av_buffersrc_parameters_alloc();
+	assert (music_params);
+	music_params->format = audio->source.decoder->sample_fmt;
+	music_params->time_base = audio->source.stream->time_base;
+	music_params->channel_layout = audio->source.decoder->channel_layout;
+	music_params->sample_rate = audio->source.decoder->sample_rate;
+	if ((rc = av_buffersrc_parameters_set(p->music, music_params)))
+		goto fail;
+	av_free(music_params);
+	if ((rc = avfilter_init_str(p->music, NULL)) < 0)
+		goto fail;
+	AVFilter *abuffersink = avfilter_get_by_name("abuffersink");
+	assert (abuffersink);
+	p->sink = avfilter_graph_alloc_filter(p->graph, abuffersink, "sink");
+	assert (p->sink);
+	if ((rc = avfilter_init_str(p->sink, NULL)) < 0)
+		goto fail;
+	if ((rc = avfilter_link(p->music, 0, p->sink, 0)) < 0)
+		goto fail;
+	if ((rc = avfilter_graph_config(p->graph, NULL)) < 0)
+		goto fail;
+	return 0;
+fail:
+	oshu_av_error(rc);
+	return -1;
+}
+
 int oshu_audio_open(const char *url, struct oshu_audio **audio)
 {
 	*audio = calloc(1, sizeof(**audio));
@@ -210,10 +248,12 @@ int oshu_audio_open(const char *url, struct oshu_audio **audio)
 		return -1;
 	}
 	if (oshu_open_stream(url, &(*audio)->source) < 0)
-		return -1;
-	dump_stream_info(*audio);
+		goto fail;
+	if (create_graph(*audio) < 0)
+		goto fail;
 	if (open_device(*audio) < 0)
 		goto fail;
+	dump_stream_info(*audio);
 	return 0;
 fail:
 	oshu_audio_close(audio);
