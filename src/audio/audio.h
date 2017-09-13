@@ -264,6 +264,7 @@ struct oshu_sample {
 	Uint32 length;
 	Uint32 cursor;
 	int loop;
+	AVFrame *frame;
 };
 
 /**
