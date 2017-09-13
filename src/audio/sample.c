@@ -61,6 +61,7 @@ static void build_frame(struct oshu_sample *sample, SDL_AudioSpec *spec)
 	sample->frame->format = AV_SAMPLE_FMT_FLT;
 	sample->frame->sample_rate = spec->freq;
 	assert (spec->channels == 2);
+	sample->frame->channels = 2;
 	sample->frame->channel_layout = AV_CH_LAYOUT_STEREO;
 }
 
@@ -80,6 +81,7 @@ int oshu_sample_load(const char *path, struct oshu_audio *audio, struct oshu_sam
 	if (convert_audio(&audio->device_spec, wav, *sample) < 0)
 		goto fail;
 	build_frame(*sample, &audio->device_spec);
+	audio->overlay = *sample;
 	return 0;
 fail:
 	oshu_sample_free(sample);

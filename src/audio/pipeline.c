@@ -49,7 +49,7 @@ static void dump_stream_info(struct oshu_audio *audio)
  * Mark the stream as finished on EOF or on ERROR, meaning you must not call
  * this function anymore.
  */
-int next_frame(struct oshu_audio *audio)
+static int next_frame(struct oshu_audio *audio)
 {
 	int rc = oshu_next_frame(&audio->source);
 	if (rc < 0) {
@@ -65,6 +65,21 @@ int next_frame(struct oshu_audio *audio)
 	return 0;
 }
 
+static void feed(struct oshu_audio *audio)
+{
+	if (av_buffersrc_get_nb_failed_requests(audio->pipeline.music) > 0) {
+		next_frame(audio);
+	}
+	if (av_buffersrc_get_nb_failed_requests(audio->pipeline.effect) > 0) {
+		if (audio->overlay) {
+			/*av_buffersrc_write_frame(audio->pipeline.effect, audio->overlay->frame);*/
+			audio->overlay = NULL;
+		} else {
+			av_buffersrc_write_frame(audio->pipeline.effect, NULL);
+		}
+	}
+}
+
 /**
  * Fill the audio buffer with the song data, then optionally add a sample.
  */
@@ -76,7 +91,7 @@ static void audio_callback(void *userdata, Uint8 *buffer, int len)
 	while (!audio->finished) {
 		rc = av_buffersink_get_frame(audio->pipeline.sink, audio->pipeline.output);
 		if (rc == AVERROR(EAGAIN)) {
-			next_frame(audio);
+			feed(audio);
 			continue;
 		} else if (rc == AVERROR_EOF) {
 			audio->finished = 1;
@@ -136,6 +151,32 @@ static int create_graph(struct oshu_audio *audio)
 	av_free(music_params);
 	if ((rc = avfilter_init_str(p->music, NULL)) < 0)
 		goto fail;
+	oshu_log_debug("music source ready");
+
+	p->effect = avfilter_graph_alloc_filter(p->graph, abuffer, "effect");
+	assert (p->effect);
+	AVBufferSrcParameters *effect_params = av_buffersrc_parameters_alloc();
+	assert (effect_params);
+	effect_params->format = AV_SAMPLE_FMT_FLT;
+	music_params->time_base = audio->source.stream->time_base;
+	effect_params->channel_layout = AV_CH_LAYOUT_STEREO;
+	effect_params->sample_rate = audio->device_spec.freq;
+	if ((rc = av_buffersrc_parameters_set(p->effect, effect_params)))
+		goto fail;
+	av_free(effect_params);
+	if ((rc = avfilter_init_str(p->effect, NULL)) < 0)
+		goto fail;
+	oshu_log_debug("effect source ready");
+
+	AVFilter *amix = avfilter_get_by_name("amix");
+	assert (amix);
+	oshu_log_debug("got the amix filter");
+	p->mixer = avfilter_graph_alloc_filter(p->graph, amix, "mixer");
+	assert (p->mixer);
+	oshu_log_debug("allocated the mixer");
+	if ((rc = avfilter_init_str(p->mixer, "inputs=2:duration=first")) < 0)
+		goto fail;
+	oshu_log_debug("mixer ready");
 
 	AVFilter *aformat = avfilter_get_by_name("aformat");
 	assert (aformat);
@@ -143,6 +184,7 @@ static int create_graph(struct oshu_audio *audio)
 	assert (p->converter);
 	if ((rc = avfilter_init_str(p->converter, "sample_fmts=flt")) < 0)
 		goto fail;
+	oshu_log_debug("converter ready");
 
 	AVFilter *abuffersink = avfilter_get_by_name("abuffersink");
 	assert (abuffersink);
@@ -150,13 +192,21 @@ static int create_graph(struct oshu_audio *audio)
 	assert (p->sink);
 	if ((rc = avfilter_init_str(p->sink, NULL)) < 0)
 		goto fail;
+	oshu_log_debug("sink ready");
 
-	if ((rc = avfilter_link(p->music, 0, p->converter, 0)) < 0)
+	if ((rc = avfilter_link(p->music, 0, p->mixer, 0)) < 0)
+		goto fail;
+	if ((rc = avfilter_link(p->effect, 0, p->mixer, 1)) < 0)
+		goto fail;
+	if ((rc = avfilter_link(p->mixer, 0, p->converter, 0)) < 0)
 		goto fail;
 	if ((rc = avfilter_link(p->converter, 0, p->sink, 0)) < 0)
 		goto fail;
+	oshu_log_debug("links ready");
+
 	if ((rc = avfilter_graph_config(p->graph, NULL)) < 0)
 		goto fail;
+	oshu_log_debug("graph ready");
 
 	av_buffersink_set_frame_size(p->sink, sample_buffer_size);
 
@@ -179,9 +229,9 @@ int oshu_audio_open(const char *url, struct oshu_audio **audio)
 	}
 	if (oshu_open_stream(url, &(*audio)->source) < 0)
 		goto fail;
-	if (create_graph(*audio) < 0)
-		goto fail;
 	if (open_device(*audio) < 0)
+		goto fail;
+	if (create_graph(*audio) < 0)
 		goto fail;
 	dump_stream_info(*audio);
 	return 0;
